@@ -32,3 +32,4 @@ class handler(BaseHTTPRequestHandler):
         # 运行异步合成逻辑
         asyncio.run(amain(text, self.wfile))
         return
+app = handler
