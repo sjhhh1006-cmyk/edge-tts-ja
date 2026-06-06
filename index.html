@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>日语音频生成器 (Nanami)</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #f5f7fa;
+            color: #333;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        }
+        h2 {
+            margin-top: 0;
+            color: #1a1a1a;
+            border-bottom: 2px solid #eaeaea;
+            padding-bottom: 10px;
+            font-size: 20px;
+        }
+        .voice-tag {
+            display: inline-block;
+            background: #e1f5fe;
+            color: #0288d1;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: bold;
+            margin-bottom: 15px;
+        }
+        textarea {
+            width: 100%;
+            height: 150px;
+            padding: 12px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            resize: vertical;
+            font-size: 16px;
+            box-sizing: border-box;
+            margin-bottom: 15px;
+        }
+        button {
+            width: 100%;
+            background-color: #007aff;
+            color: white;
+            border: none;
+            padding: 12px;
+            font-size: 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        audio {
+            width: 100%;
+            margin-top: 20px;
+            display: none;
+        }
+        .status {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #666;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Edge TTS 文字转语音</h2>
+    <div class="voice-tag">当前音色：ja-JP-NanamiNeural 🌸</div>
+    
+    <textarea id="textInput" placeholder="请输入要转换的日语文本...&#10;例如：こんにちは、お元気ですか？"></textarea>
+    
+    <button id="convertBtn" onclick="generateSpeech()">生成音频</button>
+    <div id="status" class="status"></div>
+    
+    <audio id="audioPlayer" controls></audio>
+</div>
+
+<script>
+// 生成微软接口所需的 UUID
+function getUUID() {
+    return 'xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16).toUpperCase();
+    });
+}
+
+async function generateSpeech() {
+    const text = document.getElementById('textInput').value.trim();
+    const btn = document.getElementById('convertBtn');
+    const status = document.getElementById('status');
+    const audioPlayer = document.getElementById('audioPlayer');
+
+    if (!text) {
+        alert('请输入文字！');
+        return;
+    }
+
+    btn.disabled = true;
+    status.innerText = '正在连接微软服务器...';
+    audioPlayer.style.display = 'none';
+
+    const reqId = getUUID();
+    // 微软公开的 Edge TTS WebSocket 接口
+    const wsUrl = `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=6A5AA1D4EAFF4E9BBE7FA35D66100001&ConnectionId=${reqId}`;
+    
+    const ws = new WebSocket(wsUrl);
+    ws.binaryType = 'arraybuffer';
+
+    let audioDataArray = [];
+
+    ws.onopen = () => {
+        status.innerText = '发送配置与文本...';
+        
+        // 1. 发送音频输出格式配置
+        const configMsg = `X-Timestamp:${Date.now()}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n{"context":{"system":{"name":"SpeechSDK","version":"1.12.1-rc.1","os":{"platform":"Browser"}}}}`;
+        ws.send(configMsg);
+
+        // 2. 发送 SSML 文本（这里锁定了 ja-JP 和 NanamiNeural）
+        const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='ja-JP'><voice name='ja-JP-NanamiNeural'>${text}</voice></speak>`;
+        const ttsMsg = `X-RequestId:${reqId}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:${Date.now()}\r\nPath:ssml\r\n\r\n${ssml}`;
+        ws.send(ttsMsg);
+    };
+
+    ws.onmessage = (event) => {
+        if (typeof event.data === 'string') {
+            // 处理文本消息（通常是指令或元数据）
+            if (event.data.includes('turn.end')) {
+                // 传输结束，开始组装音频
+                ws.close();
+                status.innerText = '生成成功！';
+                const blob = new Blob(audioDataArray, { type: 'audio/mp3' });
+                audioPlayer.src = URL.createObjectURL(blob);
+                audioPlayer.style.display = 'block';
+                audioPlayer.play();
+                btn.disabled = false;
+            }
+        } else if (event.data instanceof ArrayBuffer) {
+            // 处理二进制音频流
+            // 微软返回的二进制数据前有部分是 Header 文本，需要跳过它找到音频正文
+            const view = new DataView(event.data);
+            const headerLength = view.getInt16(0);
+            if (event.data.byteLength > headerLength + 2) {
+                const audioBuffer = event.data.slice(headerLength + 2);
+                audioDataArray.push(audioBuffer);
+            }
+        }
+    };
+
+    ws.onerror = (err) => {
+        console.error(err);
+        status.innerText = '发生错误，请重试。';
+        btn.disabled = false;
+    };
+
+    ws.onclose = (e) => {
+        if (!e.wasClean) {
+            status.innerText = '连接意外断开。';
+            btn.disabled = false;
+        }
+    };
+}
+</script>
+
+</body>
+</html>
