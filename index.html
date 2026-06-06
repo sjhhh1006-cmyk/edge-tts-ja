@@ -71,10 +71,11 @@
             display: none;
         }
         .status {
-            margin-top: 10px;
+            margin-top: 15px;
             font-size: 14px;
             color: #666;
             text-align: center;
+            word-break: break-all;
         }
     </style>
 </head>
@@ -93,13 +94,77 @@
 </div>
 
 <script>
-// 生成微软接口所需的 UUID
-function getUUID() {
-    return 'xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-        var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-        return v.toString(16).toUpperCase();
-    });
+// 核心逻辑：模拟 edge-tts 客户端握手与数据流解析
+class EdgeTTSBrowser {
+    constructor() {
+        this.token = "6A5AA1D4EAFF4E9BBE7FA35D66100001";
+    }
+
+    uuidv4() {
+        return 'xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+            let r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
+    }
+
+    async textToSpeech(text) {
+        return new Promise((resolve, reject) => {
+            const reqId = this.uuidv4();
+            const wsUrl = `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=${this.token}&ConnectionId=${reqId}`;
+            
+            const ws = new WebSocket(wsUrl);
+            ws.binaryType = 'arraybuffer';
+            let audioBufferList = [];
+
+            ws.onopen = () => {
+                // 1. 发送配置信息
+                const timestamp = new Date().toISOString();
+                const configPayload = `X-Timestamp:${timestamp}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n{"context":{"system":{"name":"SpeechSDK","version":"1.30.0","os":{"platform":"Browser","name":"Edge"}},"audio":{"output":{"format":"audio-24khz-48kbps-mono-mp3","codec":"mp3"}}}}`;
+                ws.send(configPayload);
+
+                // 2. 发送 SSML 文本（锁定 ja-JP-NanamiNeural）
+                const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='https://www.w3.org/2001/mstts' xml:lang='ja-JP'><voice name='ja-JP-NanamiNeural'>${text}</voice></speak>`;
+                const ssmlPayload = `X-RequestId:${reqId}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:${timestamp}\r\nPath:ssml\r\n\r\n${ssml}`;
+                ws.send(ssmlPayload);
+            };
+
+            ws.onmessage = (event) => {
+                if (typeof event.data === 'string') {
+                    if (event.data.includes('turn.end')) {
+                        ws.close();
+                        resolve(new Blob(audioBufferList, { type: 'audio/mp3' }));
+                    }
+                } else if (event.data instanceof ArrayBuffer) {
+                    // 解析微软特有的二进制数据帧头部
+                    const view = new DataView(event.data);
+                    const headerLength = view.getInt16(0);
+                    
+                    // 判断是否包含音频内容标识 (Path:audio)
+                    const textHeader = new TextDecoder().decode(new Uint8Array(event.data, 2, headerLength));
+                    if (textHeader.includes("Path:audio")) {
+                        const audioData = event.data.slice(headerLength + 2);
+                        if (audioData.byteLength > 0) {
+                            audioBufferList.push(audioData);
+                        }
+                    }
+                }
+            };
+
+            ws.onerror = (err) => {
+                reject(new Error("WebSocket 握手失败或连接被阻断。"));
+            };
+
+            ws.onclose = (e) => {
+                if (!e.wasClean && audioBufferList.length === 0) {
+                    reject(new Error(`连接被意外关闭 (Code: ${e.code})。请检查是否开启了不支持 WebSocket 的系统代理。`));
+                }
+            };
+        });
+    }
 }
+
+// 绑定前端按钮事件
+const tts = new EdgeTTSBrowser();
 
 async function generateSpeech() {
     const text = document.getElementById('textInput').value.trim();
@@ -113,68 +178,30 @@ async function generateSpeech() {
     }
 
     btn.disabled = true;
-    status.innerText = '正在连接微软服务器...';
+    status.style.color = '#666';
+    status.innerText = '正在连接微软语音服务器并合成...';
     audioPlayer.style.display = 'none';
 
-    const reqId = getUUID();
-    // 微软公开的 Edge TTS WebSocket 接口
-    const wsUrl = `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=6A5AA1D4EAFF4E9BBE7FA35D66100001&ConnectionId=${reqId}`;
-    
-    const ws = new WebSocket(wsUrl);
-    ws.binaryType = 'arraybuffer';
-
-    let audioDataArray = [];
-
-    ws.onopen = () => {
-        status.innerText = '发送配置与文本...';
+    try {
+        const audioBlob = await tts.textToSpeech(text);
         
-        // 1. 发送音频输出格式配置
-        const configMsg = `X-Timestamp:${Date.now()}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n{"context":{"system":{"name":"SpeechSDK","version":"1.12.1-rc.1","os":{"platform":"Browser"}}}}`;
-        ws.send(configMsg);
-
-        // 2. 发送 SSML 文本（这里锁定了 ja-JP 和 NanamiNeural）
-        const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='ja-JP'><voice name='ja-JP-NanamiNeural'>${text}</voice></speak>`;
-        const ttsMsg = `X-RequestId:${reqId}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:${Date.now()}\r\nPath:ssml\r\n\r\n${ssml}`;
-        ws.send(ttsMsg);
-    };
-
-    ws.onmessage = (event) => {
-        if (typeof event.data === 'string') {
-            // 处理文本消息（通常是指令或元数据）
-            if (event.data.includes('turn.end')) {
-                // 传输结束，开始组装音频
-                ws.close();
-                status.innerText = '生成成功！';
-                const blob = new Blob(audioDataArray, { type: 'audio/mp3' });
-                audioPlayer.src = URL.createObjectURL(blob);
-                audioPlayer.style.display = 'block';
-                audioPlayer.play();
-                btn.disabled = false;
-            }
-        } else if (event.data instanceof ArrayBuffer) {
-            // 处理二进制音频流
-            // 微软返回的二进制数据前有部分是 Header 文本，需要跳过它找到音频正文
-            const view = new DataView(event.data);
-            const headerLength = view.getInt16(0);
-            if (event.data.byteLength > headerLength + 2) {
-                const audioBuffer = event.data.slice(headerLength + 2);
-                audioDataArray.push(audioBuffer);
-            }
+        if (audioBlob.size === 0) {
+            throw new Error("接收到的音频数据为空。");
         }
-    };
 
-    ws.onerror = (err) => {
-        console.error(err);
-        status.innerText = '发生错误，请重试。';
+        status.style.color = '#2e7d32';
+        status.innerText = '✨ 音频合成成功！';
+        
+        audioPlayer.src = URL.createObjectURL(audioBlob);
+        audioPlayer.style.display = 'block';
+        audioPlayer.play();
+    } catch (error) {
+        console.error(error);
+        status.style.color = '#c62828';
+        status.innerText = `❌ 错误: ${error.message}`;
+    } finally {
         btn.disabled = false;
-    };
-
-    ws.onclose = (e) => {
-        if (!e.wasClean) {
-            status.innerText = '连接意外断开。';
-            btn.disabled = false;
-        }
-    };
+    }
 }
 </script>
 
