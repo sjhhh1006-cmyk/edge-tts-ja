@@ -3,206 +3,106 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>日语音频生成器 (Nanami)</title>
+    <title>Nanami 语音合成工具</title>
     <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background-color: #f5f7fa;
-            color: #333;
-            max-width: 600px;
-            margin: 50px auto;
-            padding: 20px;
-        }
-        .container {
-            background: white;
-            padding: 30px;
-            border-radius: 12px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-        }
-        h2 {
-            margin-top: 0;
-            color: #1a1a1a;
-            border-bottom: 2px solid #eaeaea;
-            padding-bottom: 10px;
-            font-size: 20px;
-        }
-        .voice-tag {
-            display: inline-block;
-            background: #e1f5fe;
-            color: #0288d1;
-            padding: 4px 10px;
-            border-radius: 20px;
-            font-size: 13px;
-            font-weight: bold;
-            margin-bottom: 15px;
-        }
-        textarea {
-            width: 100%;
-            height: 150px;
-            padding: 12px;
-            border: 1px solid #ccc;
-            border-radius: 8px;
-            resize: vertical;
-            font-size: 16px;
-            box-sizing: border-box;
-            margin-bottom: 15px;
-        }
-        button {
-            width: 100%;
-            background-color: #007aff;
-            color: white;
-            border: none;
-            padding: 12px;
-            font-size: 16px;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-        button:hover {
-            background-color: #0056b3;
-        }
-        button:disabled {
-            background-color: #cccccc;
-            cursor: not-allowed;
-        }
-        audio {
-            width: 100%;
-            margin-top: 20px;
-            display: none;
-        }
-        .status {
-            margin-top: 15px;
-            font-size: 14px;
-            color: #666;
-            text-align: center;
-            word-break: break-all;
-        }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #f5f5f7; padding: 20px; color: #333; }
+        .container { max-width: 500px; margin: 0 auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+        h2 { text-align: center; margin-bottom: 20px; color: #1d1d1f; }
+        label { font-weight: bold; display: block; margin-bottom: 5px; font-size: 14px; }
+        input, textarea, select { width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 8px; box-sizing: border-box; font-size: 14px; }
+        textarea { height: 100px; resize: none; }
+        button { width: 100%; padding: 12px; background-color: #0071e3; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; }
+        button:hover { background-color: #0077ed; }
+        .config-section { background: #fbfbfd; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px dashed #ddd; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>Edge TTS 文字转语音</h2>
-    <div class="voice-tag">当前音色：ja-JP-NanamiNeural 🌸</div>
+    <h2>ja-JP-NanamiNeural</h2>
     
-    <textarea id="textInput" placeholder="请输入要转换的日语文本...&#10;例如：こんにちは、お元気ですか？"></textarea>
+    <div class="config-section">
+        <label>Azure 密钥 (Key 1)</label>
+        <input type="password" id="azureKey" placeholder="请在此粘贴你的 Azure 密钥">
+        
+        <label>服务区域 (Region)</label>
+        <select id="azureRegion">
+            <option value="eastasia">东亚 (East Asia / 香港)</option>
+            <option value="southeastasia">东南亚 (Southeast Asia / 新加坡)</option>
+        </select>
+    </div>
+
+    <label>请输入要朗读的日语文本</label>
+    <textarea id="textInput" placeholder="输入日语，例如：こんにちは、お疲れ様でした。"></textarea>
     
-    <button id="convertBtn" onclick="generateSpeech()">生成音频</button>
-    <div id="status" class="status"></div>
-    
-    <audio id="audioPlayer" controls></audio>
+    <button id="playBtn">让 Nanami 说话</button>
 </div>
 
 <script>
-// 核心逻辑：模拟 edge-tts 客户端握手与数据流解析
-class EdgeTTSBrowser {
-    constructor() {
-        this.token = "6A5AA1D4EAFF4E9BBE7FA35D66100001";
-    }
+    // 1. 页面加载时，自动从浏览器缓存里读取之前保存的 Key 和 区域
+    document.addEventListener("DOMContentLoaded", () => {
+        const savedKey = localStorage.getItem("my_azure_key");
+        const savedRegion = localStorage.getItem("my_azure_region");
+        if (savedKey) document.getElementById("azureKey").value = savedKey;
+        if (savedRegion) document.getElementById("azureRegion").value = savedRegion;
+    });
 
-    uuidv4() {
-        return 'xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-            let r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-            return v.toString(16);
-        });
-    }
+    // 2. 点击播放按钮时的逻辑
+    document.getElementById("playBtn").addEventListener("click", async () => {
+        const key = document.getElementById("azureKey").value.trim();
+        const region = document.getElementById("azureRegion").value;
+        const text = document.getElementById("textInput").value.trim();
 
-    async textToSpeech(text) {
-        return new Promise((resolve, reject) => {
-            const reqId = this.uuidv4();
-            const wsUrl = `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=${this.token}&ConnectionId=${reqId}`;
-            
-            const ws = new WebSocket(wsUrl);
-            ws.binaryType = 'arraybuffer';
-            let audioBufferList = [];
-
-            ws.onopen = () => {
-                // 1. 发送配置信息
-                const timestamp = new Date().toISOString();
-                const configPayload = `X-Timestamp:${timestamp}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n{"context":{"system":{"name":"SpeechSDK","version":"1.30.0","os":{"platform":"Browser","name":"Edge"}},"audio":{"output":{"format":"audio-24khz-48kbps-mono-mp3","codec":"mp3"}}}}`;
-                ws.send(configPayload);
-
-                // 2. 发送 SSML 文本（锁定 ja-JP-NanamiNeural）
-                const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='https://www.w3.org/2001/mstts' xml:lang='ja-JP'><voice name='ja-JP-NanamiNeural'>${text}</voice></speak>`;
-                const ssmlPayload = `X-RequestId:${reqId}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:${timestamp}\r\nPath:ssml\r\n\r\n${ssml}`;
-                ws.send(ssmlPayload);
-            };
-
-            ws.onmessage = (event) => {
-                if (typeof event.data === 'string') {
-                    if (event.data.includes('turn.end')) {
-                        ws.close();
-                        resolve(new Blob(audioBufferList, { type: 'audio/mp3' }));
-                    }
-                } else if (event.data instanceof ArrayBuffer) {
-                    // 解析微软特有的二进制数据帧头部
-                    const view = new DataView(event.data);
-                    const headerLength = view.getInt16(0);
-                    
-                    // 判断是否包含音频内容标识 (Path:audio)
-                    const textHeader = new TextDecoder().decode(new Uint8Array(event.data, 2, headerLength));
-                    if (textHeader.includes("Path:audio")) {
-                        const audioData = event.data.slice(headerLength + 2);
-                        if (audioData.byteLength > 0) {
-                            audioBufferList.push(audioData);
-                        }
-                    }
-                }
-            };
-
-            ws.onerror = (err) => {
-                reject(new Error("WebSocket 握手失败或连接被阻断。"));
-            };
-
-            ws.onclose = (e) => {
-                if (!e.wasClean && audioBufferList.length === 0) {
-                    reject(new Error(`连接被意外关闭 (Code: ${e.code})。请检查是否开启了不支持 WebSocket 的系统代理。`));
-                }
-            };
-        });
-    }
-}
-
-// 绑定前端按钮事件
-const tts = new EdgeTTSBrowser();
-
-async function generateSpeech() {
-    const text = document.getElementById('textInput').value.trim();
-    const btn = document.getElementById('convertBtn');
-    const status = document.getElementById('status');
-    const audioPlayer = document.getElementById('audioPlayer');
-
-    if (!text) {
-        alert('请输入文字！');
-        return;
-    }
-
-    btn.disabled = true;
-    status.style.color = '#666';
-    status.innerText = '正在连接微软语音服务器并合成...';
-    audioPlayer.style.display = 'none';
-
-    try {
-        const audioBlob = await tts.textToSpeech(text);
-        
-        if (audioBlob.size === 0) {
-            throw new Error("接收到的音频数据为空。");
+        if (!key || !text) {
+            alert("请确保密钥和文本都已经填写！");
+            return;
         }
 
-        status.style.color = '#2e7d32';
-        status.innerText = '✨ 音频合成成功！';
-        
-        audioPlayer.src = URL.createObjectURL(audioBlob);
-        audioPlayer.style.display = 'block';
-        audioPlayer.play();
-    } catch (error) {
-        console.error(error);
-        status.style.color = '#c62828';
-        status.innerText = `❌ 错误: ${error.message}`;
-    } finally {
-        btn.disabled = false;
-    }
-}
+        // 自动把这次输入的 Key 牢牢记住，下次打开网页就不用再输了
+        localStorage.setItem("my_azure_key", key);
+        localStorage.setItem("my_azure_region", region);
+
+        // 动态构建官方接口网址
+        const url = `https://${region}.tts.speech.microsoft.com/cognitiveservices/v1`;
+
+        // 组装标准的 SSML 格式数据
+        const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='ja-JP'><voice name='ja-JP-NanamiNeural'>${text}</voice></speak>`;
+
+        const btn = document.getElementById("playBtn");
+        btn.innerText = "正在合成声音...";
+        btn.disabled = true;
+
+        try {
+            // 发送正规的官方跨域请求
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/ssml+xml',
+                    'X-Microsoft-OutputFormat': 'audio-16khz-128kbps-mono-mp3',
+                    'User-Agent': 'Mozilla/5.0',
+                    'Ocp-Apim-Subscription-Key': key
+                },
+                body: ssml
+            });
+
+            if (!response.ok) {
+                const errText = await response.text();
+                throw new Error(`错误码: ${response.status}, 详情: ${errText}`);
+            }
+
+            // 拿到音频流并直接用浏览器自带的音频播放器播放
+            const blob = await response.blob();
+            const audioUrl = URL.createObjectURL(blob);
+            const audio = new Audio(audioUrl);
+            audio.play();
+
+        } catch (error) {
+            alert("请求失败，请检查密钥是否正确，或网络是否通畅。\n" + error.message);
+        } finally {
+            btn.innerText = "让 Nanami 说话";
+            btn.disabled = false;
+        }
+    });
 </script>
 
 </body>
