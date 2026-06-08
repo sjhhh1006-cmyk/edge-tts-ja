@@ -1,17 +1,18 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 import edge_tts
-import asyncio
 import io
 
 app = FastAPI()
 
-@app.get("/tts")
-async def tts(
-    text: str = Query(...),
-    voice: str = Query(default="ja-JP-NanamiNeural")
-):
-    communicate = edge_tts.Communicate(text, voice)
+class TTSRequest(BaseModel):
+    text: str
+    voice: str = "ja-JP-NanamiNeural"
+
+@app.post("/tts")
+async def tts(req: TTSRequest):
+    communicate = edge_tts.Communicate(req.text, req.voice)
     audio_buffer = io.BytesIO()
     async for chunk in communicate.stream():
         if chunk["type"] == "audio":
